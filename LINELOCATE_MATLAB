@@ -1,0 +1,152 @@
+close all force
+clear all
+clc
+folder = 'INSERT_FOLDER_LOCATION_OF_TRAVERSE_FILES';
+mountNames = {'LP71';'LP21-M5'}; %%call any sub folders organizing your data
+for i = 1:length(mountNames)
+   
+   
+    %% Specify Crystal and Specimen Symmetries
+    % crystal symmetry
+    CS = {...
+      'notIndexed',...
+      crystalSymmetry('mmm', [4.8 10 6], 'mineral', 'Forsterite', 'color', [0.2 0.6 0.4])};
+
+    % plotting convention
+    setMTEXpref('xAxisDirection','east');
+    setMTEXpref('zAxisDirection','intoPlane');
+
+    %% Specify File Names
+    % path to files
+    pname = [folder,'\',mountNames{i}];
+   
+    % find all the .ctf files within that folder
+    fileList = dir(fullfile(pname, '*.ctf'));
+   
+    %% Loop over each ctf file
+   
+    for j = 1:length(fileList)
+       
+        disp(' ')
+        disp([' 	',fileList(j).name]);
+        disp(' ')
+       
+        fname = [pname,'\',fileList(j).name];
+
+        %% Import the Data
+        % create an EBSD variable containing the data
+        ebsd = EBSD.load(fname,CS,'interface','ctf',...
+          'convertEuler2SpatialReferenceFrame');
+
+        %% Remove pixels with high MAD (mean angular deviation = uncertainty, in degrees)
+        % Set their 'phase' = 0 (this turns those pixels into 'non-indexed')
+        ebsd(ebsd.mad >= 1).phase = 0;
+
+        %% Calculate grains
+        % Calculate grains by drawing grain boundaries between pixels with >10
+        % degrees difference in orientation
+        [grains ebsd.grainId] = calcGrains(ebsd,'angle',10*degree);
+        % Smooth grain boundaries to minimize pixelated appearance
+        grains = smooth(grains,3);
+       
+        % Use only the olivine grains
+        grains = grains('Forsterite');
+
+        % Find the biggest forsterite grain (by area)
+        biggestGrain = grains(grains.area == max(grains.area));
+
+        %% Plot IPF map (orientation map)
+        % And overlay the map on a band contrast map
+        % Calculate inverse pole figure coloring parallel to sample X direction
+        ipfKey = ipfHSVKey(ebsd(biggestGrain));
+        	ipfKey.inversePoleFigureDirection = vector3d.Y;
+        IPFcolor = ipfKey.orientation2color(ebsd(biggestGrain).orientations);
+        figure
+        plot(ebsd,ebsd.bc)
+        	colormap gray
+        	hold on
+        plot(ebsd(biggestGrain),IPFcolor,'translucent',0.75) 
+        plot(biggestGrain.boundary)
+       
+        % Empty arrays to fill with traverse end points
+        travX = []; travY = [];
+      
+        while length(travX) < 2
+
+        	% Select the end points of the traverse
+        	[travX(end+1),travY(end+1)] = ginput(1);    	
+            	
+        	% Plot each point after it's added
+            	hold on
+            scatter(travX,travY,'+r','linewidth',1.5)
+        end    	
+       
+        % Plot traverse on grain
+        	hold on
+        line(travX,travY,'color','r','linewidth',1.5)
+        pause(1)
+       
+        % Convert traverse end points into a vector
+        V = [abs(diff(travX)), abs(diff(travY)), 0];
+
+        % Normalize the vector to get the eigenvector
+        V = V./max(V);
+
+        % Convert to variable type 'vector3d'
+        V = vector3d(V);
+
+        %% SAVE THE TRAVERSE COORDINATES (TRAVX, TRAVY) TO SOME FILE FOR REANALYSIS IF NEEDED
+        %% Plot pole figures
+        % Use orientation data only for the biggest grain
+        % Take the orientations of every pixel within the biggest grain
+        o_allPix = ebsd(biggestGrain).orientations;
+        % or...take only the mean orientation of pixels within the biggest grain
+        o_avgOri = biggestGrain.meanOrientation;
+
+        % Plot the a, b, c directions for olivine
+        ori = [Miller(1,0,0,ebsd('Forsterite').CS,'direction'),...
+               Miller(0,1,0,ebsd('Forsterite').CS,'direction'),...
+               Miller(0,0,1,ebsd('Forsterite').CS,'direction')];
+ 
+        % figure
+        % % Plot all orientations (as scatter points) on pole figures
+        % plotPDF(o_allPix,ori,'antipodal',...
+        %     'hemisphere','lower','projection','earea',...
+        %     'markersize',3,'markerfacecolor',[0.5 0.5 0.5])
+        % 	hold on
+        % % Superimpose the mean orientation for the biggest grain
+       
+    	% plotPDF(o_avgOri,ori,'antipodal',...
+        %     'hemisphere','lower','projection','earea',...
+        %     'markersize',10,'marker','p','markerfacecolor',[1 0 0],'markeredgecolor','k')
+        %% Calculate the angle between the vector and the a[100], b[010], and c[001] directions in olivine
+        % Calculate the crystal direction parallel to the traverse
+        oriParallelToTraverse = inv(biggestGrain.meanOrientation).*V;
+        % Calculate the angle between the traverse and the a[100] direction
+        theta(1) = angle(Miller(1,0,0,ebsd('Forsterite').CS,'direction'),oriParallelToTraverse)/degree;
+        % Calculate the angle between the traverse and the b[010] direction
+        theta(2) = angle(Miller(0,1,0,ebsd('Forsterite').CS,'direction'),oriParallelToTraverse)/degree;
+        % Calculate the angle between the traverse and the c[001] direction
+        theta(3) = angle(Miller(0,0,1,ebsd('Forsterite').CS,'direction'),oriParallelToTraverse)/degree;
+       
+        %% Display result in command window
+       
+        disp([' 	Angle to a[100] = ',num2str(theta(1),3),' degrees'])
+        disp([' 	Angle to b[100] = ',num2str(theta(2),3),' degrees'])
+        disp([' 	Angle to c[100] = ',num2str(theta(3),3),' degrees'])
+        disp(' ')
+       
+        %% SAVE THETA TO SOME SORT OF OUTPUT FILE
+       
+        %% Close the figures for the next loop
+       
+        close all force
+       
+       
+    end
+   
+end
+function mouseMove (object, eventdata)
+C = get (gca, 'CurrentPoint');
+title(gca, ['(X,Y) = (', num2str(C(1,1)), ', ',num2str(C(1,2)), ')']);
+end
